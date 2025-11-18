@@ -10,6 +10,12 @@ class LMConfig(BaseModel):
     num_layers: int
     max_sequence_length: int
 
+    model_type: str = "decoder"
+    recursive_num_recursions: int = 4
+    recursive_identity_loss_weight: float = 0.0
+    recursive_prediction_loss_weight: float = 1.0
+    recursive_loss_gamma: float = 1.2
+
     pretrained_tokenizer: str
     vocab_size: Optional[int] = None
 

@@ -38,7 +38,7 @@ class SelfAttention(nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         B, T, C = x.size()  # Batch size, sequence length, embedding dimension
 
         # Compute Q, K, V and reshape for multi-head attention.
@@ -54,7 +54,18 @@ class SelfAttention(nn.Module):
             # Scaled dot-product attention.
             scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)  # (B, num_heads, T, T)
 
-            mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)
+            if attention_mask is None:
+                mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)
+            else:
+                if attention_mask.dim() == 2:
+                    mask = attention_mask.unsqueeze(0).unsqueeze(0)
+                elif attention_mask.dim() == 3:
+                    mask = attention_mask.unsqueeze(1)
+                elif attention_mask.dim() == 4:
+                    mask = attention_mask
+                else:
+                    raise ValueError(f"Unsupported attention_mask dim {attention_mask.dim()}")
+                mask = mask.to(device=x.device, dtype=torch.bool)
             scores = scores.masked_fill(mask == 0, float('-inf'))
 
             attn_weights = F.softmax(scores, dim=-1)
@@ -92,8 +103,8 @@ class TransformerBlock(nn.Module):
         self.ln2 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(0.1) 
 
-    def forward(self, x):
-        x = x + self.attn(self.ln1(x))
+    def forward(self, x, attention_mask=None):
+        x = x + self.attn(self.ln1(x), attention_mask=attention_mask)
         x = x + self.ff(self.ln2(x))
 
         x = self.dropout(x)

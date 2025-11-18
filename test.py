@@ -4,19 +4,31 @@ from transformers import AutoTokenizer
 
 from config import load_config
 from models.base import DecoderOnlyTransformer
+from models.recursive import RecursiveTransformer
 
 
 def build_model(cfg, vocab_size, device):
-    model = DecoderOnlyTransformer(
-        vocab_size=vocab_size,
-        embed_dim=cfg.embed_dim,
-        num_heads=cfg.num_heads,
-        hidden_dim=cfg.hidden_dim,
-        num_layers=cfg.num_layers,
-        max_seq_len=cfg.max_sequence_length,
-        use_flash_attn=cfg.use_flash_attn,
-        flash_attn_dropout=cfg.flash_attn_dropout,
-    ).to(device)
+    if cfg.model_type.lower() == "recursive":
+        model = RecursiveTransformer(
+            vocab_size=vocab_size,
+            embed_dim=cfg.embed_dim,
+            num_heads=cfg.num_heads,
+            hidden_dim=cfg.hidden_dim,
+            num_layers=cfg.num_layers,
+            max_seq_len=cfg.max_sequence_length,
+            n_recursions=cfg.recursive_num_recursions,
+        ).to(device)
+    else:
+        model = DecoderOnlyTransformer(
+            vocab_size=vocab_size,
+            embed_dim=cfg.embed_dim,
+            num_heads=cfg.num_heads,
+            hidden_dim=cfg.hidden_dim,
+            num_layers=cfg.num_layers,
+            max_seq_len=cfg.max_sequence_length,
+            use_flash_attn=cfg.use_flash_attn,
+            flash_attn_dropout=cfg.flash_attn_dropout,
+        ).to(device)
     return model
 
 
@@ -49,12 +61,18 @@ def generate_completion(model, tokenizer, device, cfg, prompt, max_new_tokens=No
     )
     input_ids = enc.input_ids.to(device)
 
+    is_recursive = cfg.model_type.lower() == "recursive"
+
     for _ in range(max_new_tokens):
         if input_ids.size(1) > cfg.max_sequence_length:
             input_ids = input_ids[:, -cfg.max_sequence_length :]
 
         logits = model(input_ids)
-        last_logits = logits[:, -1, :]
+        if is_recursive:
+            start_idx = input_ids.size(1) * 2 - 1
+            last_logits = logits[:, start_idx, :]
+        else:
+            last_logits = logits[:, -1, :]
 
         probs = torch.softmax(last_logits / temperature, dim=-1)
         next_token_id = torch.multinomial(probs, num_samples=1)

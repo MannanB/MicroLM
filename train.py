@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from config import load_config
 from models.base import DecoderOnlyTransformer
+from models.recursive import RecursiveTransformer
 
 
 class StreamingTokenDataset(IterableDataset):
@@ -70,6 +71,51 @@ def create_optimizer(model, peak_lr):
     return optimizer
 
 
+def compute_recursive_loss(
+    logits_per_recursion,
+    input_tokens,
+    target_tokens,
+    identity_weight,
+    prediction_weight,
+    loss_gamma,
+    pad_token_id=None,
+):
+    if not logits_per_recursion:
+        raise ValueError("logits_per_recursion must contain at least one tensor.")
+
+    device = input_tokens.device
+    B, T = input_tokens.shape
+    seq_len = T * 2
+
+    interleaved_targets = torch.stack((input_tokens, target_tokens), dim=2).reshape(B, seq_len)
+    weights = torch.full((B, seq_len), prediction_weight, device=device, dtype=torch.float32)
+    weights[:, ::2] = identity_weight
+
+    if pad_token_id is not None:
+        pad_mask = interleaved_targets == pad_token_id
+        weights = weights.masked_fill(pad_mask, 0.0)
+
+    denom = weights.sum().clamp_min(1e-8)
+    flat_targets = interleaved_targets.view(-1)
+    flat_weights = weights.view(-1)
+
+    total_loss = torch.tensor(0.0, device=device)
+    total_weight = 0.0
+
+    for step, logits in enumerate(logits_per_recursion):
+        flat_logits = logits.view(B * seq_len, -1)
+        per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none")
+        weighted = (per_token * flat_weights).sum() / denom
+        weight = loss_gamma ** step
+        total_loss = total_loss + weight * weighted
+        total_weight += weight
+
+    if total_weight == 0.0:
+        raise ValueError("Total loss weight is zero. Check recursive loss weights.")
+
+    return total_loss / total_weight
+
+
 def cosine_schedule_builder(warmup_steps, total_steps):
     warmup_steps = max(1, warmup_steps)
     total_steps = max(warmup_steps + 1, total_steps)
@@ -85,16 +131,27 @@ def cosine_schedule_builder(warmup_steps, total_steps):
 
 
 def build_model(cfg, vocab_size, device):
-    model = DecoderOnlyTransformer(
-        vocab_size,
-        cfg.embed_dim,
-        cfg.num_heads,
-        cfg.hidden_dim,
-        cfg.num_layers,
-        cfg.max_sequence_length,
-        use_flash_attn=cfg.use_flash_attn,
-        flash_attn_dropout=cfg.flash_attn_dropout,
-    ).to(device)
+    if cfg.model_type.lower() == "recursive":
+        model = RecursiveTransformer(
+            vocab_size,
+            cfg.embed_dim,
+            cfg.num_heads,
+            cfg.hidden_dim,
+            cfg.num_layers,
+            cfg.max_sequence_length,
+            n_recursions=cfg.recursive_num_recursions,
+        ).to(device)
+    else:
+        model = DecoderOnlyTransformer(
+            vocab_size,
+            cfg.embed_dim,
+            cfg.num_heads,
+            cfg.hidden_dim,
+            cfg.num_layers,
+            cfg.max_sequence_length,
+            use_flash_attn=cfg.use_flash_attn,
+            flash_attn_dropout=cfg.flash_attn_dropout,
+        ).to(device)
     return model
 
 
@@ -107,6 +164,7 @@ def parse_args():
 def main():
     args = parse_args()
     cfg = load_config(args.cfg)
+    model_type = cfg.model_type.lower()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -173,12 +231,24 @@ def main():
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
-            logits = model(x)
-            loss = F.cross_entropy(
-                logits.view(-1, vocab_size),
-                y.view(-1),
-                ignore_index=tokenizer.pad_token_id,
-            )
+            if model_type == "recursive":
+                logits = model(x, return_all_logits=True)
+                loss = compute_recursive_loss(
+                    logits,
+                    x,
+                    y,
+                    cfg.recursive_identity_loss_weight,
+                    cfg.recursive_prediction_loss_weight,
+                    cfg.recursive_loss_gamma,
+                    pad_token_id=tokenizer.pad_token_id,
+                )
+            else:
+                logits = model(x)
+                loss = F.cross_entropy(
+                    logits.view(-1, vocab_size),
+                    y.view(-1),
+                    ignore_index=tokenizer.pad_token_id,
+                )
 
             loss_norm = loss / cfg.gradient_accumulation_steps
             loss_norm.backward()
