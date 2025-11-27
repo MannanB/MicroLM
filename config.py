@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import json
 
 
@@ -15,6 +15,14 @@ class LMConfig(BaseModel):
     recursive_identity_loss_weight: float = 0.0
     recursive_prediction_loss_weight: float = 1.0
     recursive_loss_gamma: float = 1.2
+    recursive_return_all_logits: bool = False
+    recursive_aux_recursions: Optional[list[int]] = None
+    diffusion_start_from_noise: bool = True
+    diffusion_noise_schedule: Optional[List[float]] = None
+    diffusion_num_timesteps: int = 10
+    diffusion_beta_start: float = 1e-4
+    diffusion_beta_end: float = 0.02
+    diffusion_log_timesteps: Optional[List[int]] = None
 
     pretrained_tokenizer: str
     vocab_size: Optional[int] = None

@@ -5,11 +5,11 @@
     "num_layers": 8,
     "max_sequence_length": 128,
 
-    "model_type": "recursive",
-    "recursive_num_recursions": 6,
-    "recursive_identity_loss_weight": 0.01,
+    "model_type": "diffusion",
+    "recursive_num_recursions": 1,
+    "recursive_identity_loss_weight": 0.0,
     "recursive_prediction_loss_weight": 1.0,
-    "recursive_loss_gamma": 2.0,
+    "recursive_loss_gamma": 1.0,
     "recursive_return_all_logits": false,
     "recursive_aux_recursions": [1, 2, 3],
 
@@ -21,24 +21,31 @@
     "num_epochs": 3,
 
     "warmup_ratio": 0.0005,
-    "lr": 1e-2,
+    "lr": 0.001,
 
     "dataset_name": "BEE-spoke-data/fineweb-1M_longish",
     "dataset_split": "train",
     "dataset_text_field": "text",
     "estimated_tokens_per_epoch": 3500000000,
 
-    "checkpoint_prefix": "./checkpoints/refiner-7m",
+    "checkpoint_prefix": "./checkpoints/diffuser-7m",
     "resume_checkpoint_path": null,
 
     "num_workers": 0,
     "pin_memory": true,
     "drop_last": true,
-    "save_interval_ratio": 0.0002,
+    "save_interval_ratio": 0.002,
 
     "use_flash_attn": false,
     "flash_attn_dropout": 0.0,
 
     "generation_max_new_tokens": 400,
-    "generation_temperature": 1.0
+    "generation_temperature": 1.0,
+
+    "diffusion_start_from_noise": true,
+    "diffusion_noise_schedule": null,
+    "diffusion_num_timesteps": 10,
+    "diffusion_beta_start": 0.0001,
+    "diffusion_beta_end": 0.02,
+    "diffusion_log_timesteps": [0, 1, 2, 5, 9]
 }

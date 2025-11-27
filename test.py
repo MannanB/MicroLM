@@ -17,6 +17,7 @@ def build_model(cfg, vocab_size, device):
             num_layers=cfg.num_layers,
             max_seq_len=cfg.max_sequence_length,
             n_recursions=cfg.recursive_num_recursions,
+            return_all_logits=cfg.recursive_return_all_logits,
         ).to(device)
     else:
         model = DecoderOnlyTransformer(
@@ -68,11 +69,16 @@ def generate_completion(model, tokenizer, device, cfg, prompt, max_new_tokens=No
             input_ids = input_ids[:, -cfg.max_sequence_length :]
 
         logits = model(input_ids)
+        if isinstance(logits, list):
+            logits_tensor = logits[-1]
+        else:
+            logits_tensor = logits
+
         if is_recursive:
             start_idx = input_ids.size(1) * 2 - 1
-            last_logits = logits[:, start_idx, :]
+            last_logits = logits_tensor[:, start_idx, :]
         else:
-            last_logits = logits[:, -1, :]
+            last_logits = logits_tensor[:, -1, :]
 
         probs = torch.softmax(last_logits / temperature, dim=-1)
         next_token_id = torch.multinomial(probs, num_samples=1)

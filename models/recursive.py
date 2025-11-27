@@ -20,12 +20,14 @@ class RecursiveTransformer(nn.Module):
         num_layers,
         max_seq_len,
         n_recursions=4,
+        return_all_logits=False,
     ):
         super().__init__()
         self.token_emb = nn.Embedding(vocab_size, embed_dim)
         self.embed_dim = embed_dim
         self.n_recursions = n_recursions
         self.max_seq_len = max_seq_len
+        self.default_return_all_logits = return_all_logits
 
         pe = get_sinusoid_encoding_table(max_seq_len * 2, embed_dim, device=torch.device("cpu"))
         self.register_buffer("pe", pe)  # Shape: (max_seq_len * 2, embed_dim)
@@ -69,7 +71,10 @@ class RecursiveTransformer(nn.Module):
         stacked = torch.stack((token_embeddings, start), dim=2)
         return stacked.view(B, T * 2, C)
 
-    def forward(self, idx, return_all_logits=False):
+    def forward(self, idx, return_all_logits=None):
+        if return_all_logits is None:
+            return_all_logits = self.default_return_all_logits
+
         B, T = idx.shape
         token_embeddings = self.token_emb(idx)
         x = self._interleave_start_embeddings(token_embeddings)
@@ -83,17 +88,27 @@ class RecursiveTransformer(nn.Module):
         pos_embeddings = self.pe[:seq_len, :].unsqueeze(0)
         x = x + pos_embeddings
 
+        fixed_token_inputs = x[:, ::2, :].clone()
+
         attn_mask = self._build_attention_mask(T, device=idx.device)
 
-        all_logits = []
+        all_logits = [] if return_all_logits else None
+        last_logits = None
         for _ in range(self.n_recursions):
+            x = x.clone()
+            x[:, ::2, :] = fixed_token_inputs
             for block in self.layers:
                 x = block(x, attention_mask=attn_mask)
 
             normalized = self.ln_f(x)
             logits = self.head(normalized)
-            all_logits.append(logits)
+            if return_all_logits:
+                all_logits.append(logits)
+            last_logits = logits
+            x = normalized
 
         if return_all_logits:
             return all_logits
-        return all_logits[-1]
+        if last_logits is None:
+            raise RuntimeError("No logits produced during recursion. Check n_recursions > 0.")
+        return last_logits

@@ -1,26 +1,18 @@
 {
-    "embed_dim": 128,
+    "embed_dim": 384,
     "num_heads": 4,
-    "hidden_dim": 256,
+    "hidden_dim": 768,
     "num_layers": 8,
     "max_sequence_length": 128,
-
-    "model_type": "recursive",
-    "recursive_num_recursions": 6,
-    "recursive_identity_loss_weight": 0.01,
-    "recursive_prediction_loss_weight": 1.0,
-    "recursive_loss_gamma": 2.0,
-    "recursive_return_all_logits": false,
-    "recursive_aux_recursions": [1, 2, 3],
-
+    
     "pretrained_tokenizer": "bert-base-uncased",
     "vocab_size": null,
 
-    "gradient_accumulation_steps": 8,
-    "batch_size": 8,
+    "gradient_accumulation_steps": 16,
+    "batch_size": 16,
     "num_epochs": 3,
 
-    "warmup_ratio": 0.0005,
+    "warmup_ratio": 0.00005,
     "lr": 1e-2,
 
     "dataset_name": "BEE-spoke-data/fineweb-1M_longish",
@@ -28,17 +20,17 @@
     "dataset_text_field": "text",
     "estimated_tokens_per_epoch": 3500000000,
 
-    "checkpoint_prefix": "./checkpoints/refiner-7m",
+    "checkpoint_prefix": "./checkpoints/microlmtest-8m",
     "resume_checkpoint_path": null,
 
     "num_workers": 0,
     "pin_memory": true,
     "drop_last": true,
-    "save_interval_ratio": 0.0002,
+    "save_interval_ratio": 0.1,
 
     "use_flash_attn": false,
     "flash_attn_dropout": 0.0,
 
-    "generation_max_new_tokens": 400,
+    "generation_max_new_tokens": 500,
     "generation_temperature": 1.0
 }

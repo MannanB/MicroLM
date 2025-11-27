@@ -85,27 +85,45 @@ def compute_recursive_loss(
 
     device = input_tokens.device
     B, T = input_tokens.shape
-    seq_len = T * 2
+    seq_len = logits_per_recursion[0].size(1)
+    if seq_len != T * 2:
+        raise ValueError(f"Expected interleaved sequence length {T * 2}, got {seq_len}.")
 
     interleaved_targets = torch.stack((input_tokens, target_tokens), dim=2).reshape(B, seq_len)
-    weights = torch.full((B, seq_len), prediction_weight, device=device, dtype=torch.float32)
-    weights[:, ::2] = identity_weight
-
+    pad_mask = None
     if pad_token_id is not None:
         pad_mask = interleaved_targets == pad_token_id
-        weights = weights.masked_fill(pad_mask, 0.0)
 
-    denom = weights.sum().clamp_min(1e-8)
+    position_ids = torch.arange(seq_len, device=device)
+    token_mask = (position_ids % 2 == 0).unsqueeze(0).expand(B, seq_len)
+
     flat_targets = interleaved_targets.view(-1)
-    flat_weights = weights.view(-1)
 
     total_loss = torch.tensor(0.0, device=device)
     total_weight = 0.0
 
     for step, logits in enumerate(logits_per_recursion):
+        if step < len(logits_per_recursion) - 1:
+            continue
         flat_logits = logits.view(B * seq_len, -1)
-        per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none")
-        weighted = (per_token * flat_weights).sum() / denom
+        per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none").view(B, seq_len)
+
+        step_weights = torch.full(
+            (B, seq_len),
+            prediction_weight,
+            device=device,
+            dtype=torch.float32,
+        )
+        if step == len(logits_per_recursion) - 1:
+            step_weights = step_weights.masked_fill(token_mask, identity_weight)
+        else:
+            step_weights = step_weights.masked_fill(token_mask, 0.0)
+
+        if pad_mask is not None:
+            step_weights = step_weights.masked_fill(pad_mask, 0.0)
+
+        denom = step_weights.sum().clamp_min(1e-8)
+        weighted = (per_token * step_weights).sum() / denom
         weight = loss_gamma ** step
         total_loss = total_loss + weight * weighted
         total_weight += weight
@@ -114,6 +132,33 @@ def compute_recursive_loss(
         raise ValueError("Total loss weight is zero. Check recursive loss weights.")
 
     return total_loss / total_weight
+
+
+def compute_recursive_loss_at_step(
+    logits_per_recursion,
+    step_index,
+    input_tokens,
+    target_tokens,
+    identity_weight,
+    prediction_weight,
+    loss_gamma,
+    pad_token_id=None,
+):
+    """
+    Compute the recursive loss using only the logits from a specific recursion
+    step. Returns None if the requested step index is out of range.
+    """
+    if step_index < 0 or step_index >= len(logits_per_recursion):
+        return None
+    return compute_recursive_loss(
+        [logits_per_recursion[step_index]],
+        input_tokens,
+        target_tokens,
+        identity_weight,
+        prediction_weight,
+        loss_gamma,
+        pad_token_id=pad_token_id,
+    )
 
 
 def cosine_schedule_builder(warmup_steps, total_steps):
@@ -140,6 +185,7 @@ def build_model(cfg, vocab_size, device):
             cfg.num_layers,
             cfg.max_sequence_length,
             n_recursions=cfg.recursive_num_recursions,
+            return_all_logits=cfg.recursive_return_all_logits,
         ).to(device)
     else:
         model = DecoderOnlyTransformer(
@@ -216,6 +262,13 @@ def main():
     optimizer = create_optimizer(model, cfg.lr)
     scheduler = LambdaLR(optimizer, cosine_schedule_builder(warmup_steps, total_steps))
 
+    aux_recursions = []
+    if model_type == "recursive":
+        if cfg.recursive_aux_recursions:
+            aux_recursions = sorted({max(1, int(step)) for step in cfg.recursive_aux_recursions if step is not None})
+        else:
+            aux_recursions = [max(1, cfg.recursive_num_recursions // 2)]
+
     all_losses = []
 
     print("Starting training...")
@@ -231,6 +284,7 @@ def main():
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
+            aux_loss_records = []
             if model_type == "recursive":
                 logits = model(x, return_all_logits=True)
                 loss = compute_recursive_loss(
@@ -242,6 +296,21 @@ def main():
                     cfg.recursive_loss_gamma,
                     pad_token_id=tokenizer.pad_token_id,
                 )
+                with torch.no_grad():
+                    for aux_step in aux_recursions:
+                        aux_idx = aux_step - 1
+                        aux_loss = compute_recursive_loss_at_step(
+                            logits,
+                            aux_idx,
+                            x,
+                            y,
+                            cfg.recursive_identity_loss_weight,
+                            cfg.recursive_prediction_loss_weight,
+                            cfg.recursive_loss_gamma,
+                            pad_token_id=tokenizer.pad_token_id,
+                        )
+                        if aux_loss is not None:
+                            aux_loss_records.append({"step": aux_step, "loss": aux_loss.item()})
             else:
                 logits = model(x)
                 loss = F.cross_entropy(
@@ -258,8 +327,16 @@ def main():
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
 
-            all_losses.append(loss.item())
-            pbar.set_description(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+            loss_entry = {"loss": loss.item()}
+            if aux_loss_records:
+                loss_entry["aux_losses"] = aux_loss_records
+            all_losses.append(loss_entry)
+
+            desc = f"Epoch {epoch + 1}, Loss: {loss.item():.4f}"
+            if aux_loss_records:
+                aux_desc = ", ".join([f"Aux@{rec['step']}:{rec['loss']:.4f}" for rec in aux_loss_records])
+                desc += f", {aux_desc}"
+            pbar.set_description(desc)
 
             if batch_idx % save_every == 0:
                 ckpt_name = f"{cfg.checkpoint_prefix}-epoch-{epoch + 1}-batch-{batch_idx}.pt"
