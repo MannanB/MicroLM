@@ -23,6 +23,8 @@ class LMConfig(BaseModel):
     diffusion_beta_start: float = 1e-4
     diffusion_beta_end: float = 0.02
     diffusion_log_timesteps: Optional[List[int]] = None
+    diffusion_ce_weight: float = 1.0
+    diffusion_mse_weight: float = 1.0
 
     pretrained_tokenizer: str
     vocab_size: Optional[int] = None

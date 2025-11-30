@@ -35,11 +35,13 @@ class DiffusionRefiner(nn.Module):
         num_timesteps=10,
         beta_start=1e-4,
         beta_end=0.02,
+        use_inverse_vocab_head=False,
     ):
         super().__init__()
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
         self.num_timesteps = num_timesteps
+        self.use_inverse_vocab_head = use_inverse_vocab_head
 
         betas = torch.linspace(beta_start, beta_end, steps=num_timesteps)
         alphas = 1.0 - betas
@@ -62,6 +64,13 @@ class DiffusionRefiner(nn.Module):
             nn.SiLU(),
             nn.Linear(embed_dim * 4, embed_dim),
         )
+
+        # Vocab projection for language modeling on start slots
+        if not self.use_inverse_vocab_head:
+            self.vocab_head = nn.Linear(embed_dim, vocab_size, bias=False)
+            self.vocab_head.weight = self.token_emb.weight  # tie weights
+        else:
+            self.vocab_head = nn.Linear(embed_dim, vocab_size, bias=False)
 
         self.layers = nn.ModuleList(
             [
@@ -97,12 +106,15 @@ class DiffusionRefiner(nn.Module):
 
         return mask.unsqueeze(0).unsqueeze(0)
 
-    def forward(self, idx, timesteps, noise=None):
+    def forward(self, idx, timesteps, noise=None, noisy_start_override=None, return_logits=False, return_x0=False):
         """
         idx: (B, T) token ids
         timesteps: (B,) integer timesteps
-        noise: optional noise tensor for start slots (B, T, C). If None, sampled internally.
-        returns predicted noise tensor for start slots (B, T, C)
+        noise: optional noise tensor for start slots (B, T, C). If None, sampled internally when noisy_start_override is not provided.
+        noisy_start_override: optional already-noisy start slots (B, T, C) to skip re-noising.
+        return_logits: when True, also return vocab logits from predicted clean start slots.
+        return_x0: when True, also return predicted clean start slots.
+        returns predicted noise tensor for start slots (B, T, C) and optionally logits/x0.
         """
         B, T = idx.shape
         if timesteps.dim() != 1 or timesteps.size(0) != B:
@@ -122,14 +134,16 @@ class DiffusionRefiner(nn.Module):
 
         token_fixed = token_embeddings + token_pos
 
-        start_base = self.start_embed.view(1, 1, self.embed_dim).expand(B, T, self.embed_dim)
-        start_base = start_base + start_pos
-
-        if noise is None:
-            noise = torch.randn_like(start_base)
+        start_base = self.start_embed.view(1, 1, self.embed_dim).expand(B, T, self.embed_dim) + start_pos
 
         sqrt_alpha, sqrt_one_minus = self._get_scheduled_factors(timesteps)
-        x_start_noisy = sqrt_alpha * start_base + sqrt_one_minus * noise
+
+        if noisy_start_override is not None:
+            x_start_noisy = noisy_start_override
+        else:
+            if noise is None:
+                noise = torch.randn_like(start_base)
+            x_start_noisy = sqrt_alpha * start_base + sqrt_one_minus * noise
 
         # Interleave tokens (clean) and noised starts
         stacked = torch.stack((token_fixed, x_start_noisy), dim=2)
@@ -148,4 +162,19 @@ class DiffusionRefiner(nn.Module):
         x = self.ln_f(x)
         pred = self.head(x)
         pred_start_noise = pred[:, 1::2, :]
+        x0_pred = (x_start_noisy - sqrt_one_minus * pred_start_noise) / sqrt_alpha
+
+        logits = None
+        if return_logits:
+            if self.use_inverse_vocab_head:
+                logits = torch.matmul(x0_pred, self.token_emb.weight.t())
+            else:
+                logits = self.vocab_head(x0_pred)
+
+        if return_logits and return_x0:
+            return pred_start_noise, logits, x0_pred
+        if return_logits:
+            return pred_start_noise, logits
+        if return_x0:
+            return pred_start_noise, x0_pred
         return pred_start_noise

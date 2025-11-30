@@ -1,8 +1,8 @@
 {
-    "embed_dim": 128,
-    "num_heads": 4,
-    "hidden_dim": 256,
-    "num_layers": 8,
+    "embed_dim": 256,
+    "num_heads": 8,
+    "hidden_dim": 512,
+    "num_layers": 14,
     "max_sequence_length": 128,
 
     "model_type": "diffusion",
@@ -17,19 +17,19 @@
     "vocab_size": null,
 
     "gradient_accumulation_steps": 4,
-    "batch_size": 40,
+    "batch_size": 32,
     "num_epochs": 3,
 
     "warmup_ratio": 0.0005,
-    "lr": 0.001,
+    "lr": 0.003,
 
     "dataset_name": "BEE-spoke-data/fineweb-1M_longish",
     "dataset_split": "train",
     "dataset_text_field": "text",
     "estimated_tokens_per_epoch": 3500000000,
 
-    "checkpoint_prefix": "./checkpoints/diffuser-7m",
-    "resume_checkpoint_path": null,
+    "checkpoint_prefix": "./checkpoints/diffuser-large-7m",
+    "resume_checkpoint_path": "./checkpoints/diffuser-large-7m-diffusion-epoch-1-batch-3416-1-after-1.pt",
 
     "num_workers": 0,
     "pin_memory": true,
@@ -45,10 +45,10 @@
     "diffusion_start_from_noise": true,
     "diffusion_noise_schedule": null,
     "diffusion_num_timesteps": 10,
-    "diffusion_beta_start": 0.1,
-    "diffusion_beta_end": 0.3,
-    "diffusion_use_inverse_head": false,
+    "diffusion_beta_start": 0.0001,
+    "diffusion_beta_end": 0.2,
+    "diffusion_use_inverse_head": true,
     "diffusion_log_timesteps": [0, 1, 2, 5, 9],
-    "diffusion_ce_weight": 0.066,
+    "diffusion_ce_weight": 0.5,
     "diffusion_mse_weight": 1
 }

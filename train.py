@@ -77,15 +77,18 @@ def compute_recursive_loss(
     target_tokens,
     identity_weight,
     prediction_weight,
-    loss_gamma,
     pad_token_id=None,
 ):
+    """
+    Compute loss only from the final recursion logits (no gamma weighting).
+    """
     if not logits_per_recursion:
         raise ValueError("logits_per_recursion must contain at least one tensor.")
 
     device = input_tokens.device
     B, T = input_tokens.shape
-    seq_len = logits_per_recursion[0].size(1)
+    final_logits = logits_per_recursion[-1]
+    seq_len = final_logits.size(1)
     if seq_len != T * 2:
         raise ValueError(f"Expected interleaved sequence length {T * 2}, got {seq_len}.")
 
@@ -98,40 +101,21 @@ def compute_recursive_loss(
     token_mask = (position_ids % 2 == 0).unsqueeze(0).expand(B, seq_len)
 
     flat_targets = interleaved_targets.view(-1)
+    flat_logits = final_logits.view(B * seq_len, -1)
+    per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none").view(B, seq_len)
 
-    total_loss = torch.tensor(0.0, device=device)
-    total_weight = 0.0
+    step_weights = torch.full(
+        (B, seq_len),
+        prediction_weight,
+        device=device,
+        dtype=torch.float32,
+    ).masked_fill(token_mask, identity_weight)
 
-    for step, logits in enumerate(logits_per_recursion):
-        if step < len(logits_per_recursion) - 1:
-            continue
-        flat_logits = logits.view(B * seq_len, -1)
-        per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none").view(B, seq_len)
+    if pad_mask is not None:
+        step_weights = step_weights.masked_fill(pad_mask, 0.0)
 
-        step_weights = torch.full(
-            (B, seq_len),
-            prediction_weight,
-            device=device,
-            dtype=torch.float32,
-        )
-        if step == len(logits_per_recursion) - 1:
-            step_weights = step_weights.masked_fill(token_mask, identity_weight)
-        else:
-            step_weights = step_weights.masked_fill(token_mask, 0.0)
-
-        if pad_mask is not None:
-            step_weights = step_weights.masked_fill(pad_mask, 0.0)
-
-        denom = step_weights.sum().clamp_min(1e-8)
-        weighted = (per_token * step_weights).sum() / denom
-        weight = loss_gamma ** step
-        total_loss = total_loss + weight * weighted
-        total_weight += weight
-
-    if total_weight == 0.0:
-        raise ValueError("Total loss weight is zero. Check recursive loss weights.")
-
-    return total_loss / total_weight
+    denom = step_weights.sum().clamp_min(1e-8)
+    return (per_token * step_weights).sum() / denom
 
 
 def compute_recursive_loss_at_step(
@@ -141,7 +125,6 @@ def compute_recursive_loss_at_step(
     target_tokens,
     identity_weight,
     prediction_weight,
-    loss_gamma,
     pad_token_id=None,
 ):
     """
@@ -156,7 +139,6 @@ def compute_recursive_loss_at_step(
         target_tokens,
         identity_weight,
         prediction_weight,
-        loss_gamma,
         pad_token_id=pad_token_id,
     )
 
@@ -293,7 +275,6 @@ def main():
                     y,
                     cfg.recursive_identity_loss_weight,
                     cfg.recursive_prediction_loss_weight,
-                    cfg.recursive_loss_gamma,
                     pad_token_id=tokenizer.pad_token_id,
                 )
                 with torch.no_grad():
@@ -306,7 +287,6 @@ def main():
                             y,
                             cfg.recursive_identity_loss_weight,
                             cfg.recursive_prediction_loss_weight,
-                            cfg.recursive_loss_gamma,
                             pad_token_id=tokenizer.pad_token_id,
                         )
                         if aux_loss is not None:
