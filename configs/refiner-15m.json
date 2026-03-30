@@ -2,11 +2,11 @@
     "embed_dim": 256,
     "num_heads": 8,
     "hidden_dim": 512,
-    "num_layers": 14,
+    "num_layers": 12,
     "max_sequence_length": 128,
 
     "model_type": "recursive",
-    "recursive_num_recursions": 12,
+    "recursive_num_recursions": 6,
     "recursive_identity_loss_weight": 0.03,
     "recursive_prediction_loss_weight": 1.0,
     "recursive_loss_gamma": 2.0,
@@ -16,8 +16,8 @@
     "pretrained_tokenizer": "bert-base-uncased",
     "vocab_size": null,
 
-    "gradient_accumulation_steps": 8,
-    "batch_size": 8,
+    "gradient_accumulation_steps": 32,
+    "batch_size": 6,
     "num_epochs": 3,
 
     "warmup_ratio": 0.0005,

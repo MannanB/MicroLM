@@ -1,10 +1,13 @@
 import pickle
 import matplotlib.pyplot as plt
+import argparse
 
-def plot_losses(losses_file):
+def plot_losses(losses_file, ma=0):
     with open(losses_file, "rb") as f:
         all_losses = pickle.load(f)
     print(f"Loaded {len(all_losses)} loss entries from {losses_file}")
+
+
 
     if not all_losses:
         print("No losses to plot.")
@@ -45,14 +48,23 @@ def plot_losses(losses_file):
                     series.append(None)
     else:
         raise ValueError("Unsupported loss entry type. Expected number or dict with 'loss' key.")
-
     plt.figure(figsize=(10, 5))
-    plt.plot(main_losses, label="Main Loss", color="blue")
 
     for step in sorted(aux_series.keys()):
         series = aux_series[step]
         label = f"Aux Loss (step {step})"
         plt.plot(series, label=label)
+
+    plt.plot(main_losses, label="Main Loss", color="blue")
+
+    if ma > 0:
+        avg = []
+        for i in range(len(main_losses)):
+            window = main_losses[max(0, i - ma + 1):i + 1]
+            avg.append(sum(window) / len(window))
+
+        plt.plot(avg, label=f"Main Loss (MA={ma})", color="cyan")
+
 
     plt.xlabel("Batch Number")
     plt.ylabel("Loss")
@@ -65,5 +77,9 @@ def plot_losses(losses_file):
 
 
 if __name__ == "__main__":
-    plot_losses('losses.pkl')
+    args = argparse.ArgumentParser(description="Plot training losses from a pickle file.")
+    args.add_argument("--losses_file", type=str, default="losses.pkl", help="Path to the pickle file containing losses.")
+    args.add_argument("--moving_average", type=int, default=0, help="Window size for moving average smoothing.")
+    parsed_args = args.parse_args()
+    plot_losses(parsed_args.losses_file, parsed_args.moving_average)
     print("Loss plot saved as 'training_loss_plot.png'")
